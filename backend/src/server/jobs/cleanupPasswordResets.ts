@@ -1,16 +1,20 @@
 import { db } from "@/lib/db";
+import { systemClock, type Clock } from "@/lib/clock";
 import { passwordResets } from "@/lib/db/schema";
 import { or, lt, isNotNull } from "drizzle-orm";
 
-export async function cleanupExpiredTokens() {
+export async function cleanupExpiredTokens(now: Clock = systemClock) {
   try {
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const currentTime = now();
+    const twentyFourHoursAgo = new Date(
+      currentTime.getTime() - 24 * 60 * 60 * 1000,
+    );
 
     const result = await db
       .delete(passwordResets)
       .where(
         or(
-          lt(passwordResets.expiresAt, new Date()),
+          lt(passwordResets.expiresAt, currentTime),
           lt(passwordResets.createdAt, twentyFourHoursAgo),
           isNotNull(passwordResets.usedAt),
         ),

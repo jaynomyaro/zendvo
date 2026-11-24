@@ -1,8 +1,11 @@
 import { cleanupExpiredOTPs } from "../services/otpService";
+import { systemClock, type Clock } from "@/lib/clock";
 
-export async function cleanupExpiredOTPRecords(): Promise<number> {
+export async function cleanupExpiredOTPRecords(
+  now: Clock = systemClock,
+): Promise<number> {
   try {
-    const deletedCount = await cleanupExpiredOTPs();
+    const deletedCount = await cleanupExpiredOTPs(now);
 
     console.log(
       `[CLEANUP_JOB] Deleted ${deletedCount} expired OTP records.`,

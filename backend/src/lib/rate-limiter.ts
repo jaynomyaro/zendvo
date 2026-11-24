@@ -1,3 +1,5 @@
+import { systemClock, type Clock } from "@/lib/clock";
+
 type RateLimitStore = {
   [key: string]: {
     count: number;
@@ -21,11 +23,12 @@ function getRateLimitStatus(
   key: string,
   limit: number,
   windowMs: number,
+  now: () => number,
 ): RateLimitStatus {
-  const now = Date.now();
+  const nowMs = now();
   const entry = store[key];
 
-  if (!entry || now - entry.startTime > windowMs) {
+  if (!entry || nowMs - entry.startTime > windowMs) {
     return {
       key,
       count: 0,
@@ -37,7 +40,7 @@ function getRateLimitStatus(
     };
   }
 
-  const elapsed = now - entry.startTime;
+  const elapsed = nowMs - entry.startTime;
   const resetMs = windowMs - elapsed;
   const remaining = Math.max(0, limit - entry.count);
 
@@ -56,12 +59,13 @@ function consumeRateLimitInternal(
   key: string,
   limit: number = 5,
   windowMs: number = 3600000,
+  now: () => number,
 ): RateLimitStatus {
-  const now = Date.now();
+  const nowMs = now();
   const entry = store[key];
 
-  if (!entry || now - (entry?.startTime ?? 0) > windowMs) {
-    store[key] = { count: 1, startTime: now };
+  if (!entry || nowMs - (entry?.startTime ?? 0) > windowMs) {
+    store[key] = { count: 1, startTime: nowMs };
     return {
       key,
       count: 1,
@@ -74,7 +78,7 @@ function consumeRateLimitInternal(
   }
 
   entry.count += 1;
-  const elapsed = now - entry.startTime;
+  const elapsed = nowMs - entry.startTime;
   const resetMs = windowMs - elapsed;
   const remaining = Math.max(0, limit - entry.count);
 
@@ -89,20 +93,26 @@ function consumeRateLimitInternal(
   };
 }
 
+function toMsClock(now: Clock = systemClock): () => number {
+  return () => now().getTime();
+}
+
 export const consumeRateLimit = (
   key: string,
   limit: number = 5,
   windowMs: number = 3600000,
+  now: Clock = systemClock,
 ): RateLimitStatus => {
-  return consumeRateLimitInternal(key, limit, windowMs);
+  return consumeRateLimitInternal(key, limit, windowMs, toMsClock(now));
 };
 
 export const isRateLimited = (
   key: string,
   limit: number = 5,
   windowMs: number = 3600000,
+  now: Clock = systemClock,
 ): boolean => {
-  const status = consumeRateLimitInternal(key, limit, windowMs);
+  const status = consumeRateLimitInternal(key, limit, windowMs, toMsClock(now));
   return status.limited;
 };
 
@@ -110,14 +120,16 @@ export const getRateLimitRemaining = (
   key: string,
   limit: number = 5,
   windowMs: number = 3600000,
+  now: Clock = systemClock,
 ): number => {
-  return getRateLimitStatus(key, limit, windowMs).remaining;
+  return getRateLimitStatus(key, limit, windowMs, toMsClock(now)).remaining;
 };
 
 export const getRateLimitStatusForKey = (
   key: string,
   limit: number = 5,
   windowMs: number = 3600000,
+  now: Clock = systemClock,
 ): RateLimitStatus => {
-  return getRateLimitStatus(key, limit, windowMs);
+  return getRateLimitStatus(key, limit, windowMs, toMsClock(now));
 };

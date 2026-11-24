@@ -2,6 +2,20 @@
 
 This document lists all the environment variables required for the Zendvo backend.
 
+## Core Infrastructure
+
+- `DATABASE_URL` - PostgreSQL connection string used by Drizzle ORM. Defaults to `postgres://postgres:postgres@localhost:5432/zendvo` when unset.
+- `REDIS_URL` - Optional Redis connection string (e.g. `redis://localhost:6379`). Reserved for shared rate-limit/session storage; not required for the current in-memory implementations.
+
+### Smoke tests
+
+`backend/__tests__/smoke/infrastructure.test.ts` verifies connectivity to the
+services above. Each test runs only when its env var is set:
+
+```bash
+DATABASE_URL=postgres://... REDIS_URL=redis://... pnpm --filter zendvo-backend test
+```
+
 ## AWS S3 Configuration (Image Upload)
 
 The following environment variables are required for the image upload feature:

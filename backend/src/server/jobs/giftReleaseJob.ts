@@ -1,11 +1,12 @@
 import cron from 'node-cron';
 import { db } from "@/lib/db";
+import { systemClock, type Clock } from "@/lib/clock";
 import { gifts, wallets, transactions, notifications } from "@/lib/db/schema";
 import { eq, and, lte, sql } from "drizzle-orm";
 
 let isProcessing = false;
 
-export const startGiftReleaseJob = () => {
+export const startGiftReleaseJob = (now: Clock = systemClock) => {
   cron.schedule('*/1 * * * *', async () => {
     if (isProcessing) {
       console.warn('[Cron Job] Previous execution is still active. Skipping tick.');
@@ -14,7 +15,7 @@ export const startGiftReleaseJob = () => {
 
     try {
       isProcessing = true;
-      const now = new Date();
+      const currentTime = now();
 
       console.log('[Cron Job] Checking for mature time-locked gifts...');
 
@@ -25,7 +26,7 @@ export const startGiftReleaseJob = () => {
         .where(
           and(
             eq(gifts.status, 'confirmed'),
-            lte(gifts.unlockDatetime, now)
+            lte(gifts.unlockDatetime, currentTime)
           )
         );
 
@@ -56,7 +57,7 @@ export const startGiftReleaseJob = () => {
               .update(wallets)
               .set({ 
                 balance: sql`${wallets.balance} + ${lockedGift.amount}`, 
-                updatedAt: new Date() 
+                updatedAt: currentTime 
               })
               .where(eq(wallets.userId, lockedGift.recipientId))
               .returning();
@@ -68,7 +69,7 @@ export const startGiftReleaseJob = () => {
             // 5. Shift state status values safely to completed
             await tx
               .update(gifts)
-              .set({ status: 'completed', updatedAt: new Date() })
+              .set({ status: 'completed', updatedAt: currentTime })
               .where(eq(gifts.id, lockedGift.id));
 
             // 6. Write history record inside the corrected 'transaction' table structure

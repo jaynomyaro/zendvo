@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { systemClock, type Clock } from "@/lib/clock";
 import { usedActionTokens } from "@/lib/db/schema";
 import { lt } from "drizzle-orm";
 
@@ -14,11 +15,13 @@ import { lt } from "drizzle-orm";
  * token's exp timestamp; cleaning up more frequently than the token lifetime
  * (ACTION_TOKEN_EXPIRY = 10 minutes) keeps the table small.
  */
-export async function cleanupExpiredUsedActionTokens(): Promise<number> {
+export async function cleanupExpiredUsedActionTokens(
+  now: Clock = systemClock,
+): Promise<number> {
   try {
     const result = await db
       .delete(usedActionTokens)
-      .where(lt(usedActionTokens.expiresAt, new Date()))
+      .where(lt(usedActionTokens.expiresAt, now()))
       .returning();
 
     const deletedCount = result.length;

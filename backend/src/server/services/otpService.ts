@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { db } from "@/lib/db";
+import { systemClock, type Clock } from "@/lib/clock";
 import { users, emailVerifications } from "@/lib/db/schema";
 import { eq, and, desc, lt, or, gt, sql } from "drizzle-orm";
 import { validateE164PhoneNumber, sanitizePhoneNumber } from "@/lib/validation";
@@ -34,8 +35,10 @@ export interface OTPRateLimitResult {
 
 export async function checkOTPRequestRateLimit(
   phoneNumber: string,
+  now: Clock = systemClock,
 ): Promise<OTPRateLimitResult> {
-  const windowStart = new Date(Date.now() - OTP_RATE_LIMIT_WINDOW_MS);
+  const nowMs = now().getTime();
+  const windowStart = new Date(nowMs - OTP_RATE_LIMIT_WINDOW_MS);
 
   const user = await db.query.users.findFirst({
     where: eq(users.phoneNumber, phoneNumber),
@@ -76,7 +79,7 @@ export async function checkOTPRequestRateLimit(
       ? Math.max(
           0,
           OTP_RATE_LIMIT_WINDOW_MS -
-            (Date.now() - new Date(oldestOTP.createdAt).getTime()),
+            (nowMs - new Date(oldestOTP.createdAt).getTime()),
         )
       : OTP_RATE_LIMIT_WINDOW_MS;
 
@@ -97,8 +100,10 @@ export async function checkOTPRequestRateLimit(
 
 export async function checkOTPRequestRateLimitByUserId(
   userId: string,
+  now: Clock = systemClock,
 ): Promise<OTPRateLimitResult> {
-  const windowStart = new Date(Date.now() - OTP_RATE_LIMIT_WINDOW_MS);
+  const nowMs = now().getTime();
+  const windowStart = new Date(nowMs - OTP_RATE_LIMIT_WINDOW_MS);
 
   const recentOTPs = await db
     .select({ count: sql<number>`count(*)::int` })
@@ -126,7 +131,7 @@ export async function checkOTPRequestRateLimitByUserId(
       ? Math.max(
           0,
           OTP_RATE_LIMIT_WINDOW_MS -
-            (Date.now() - new Date(oldestOTP.createdAt).getTime()),
+            (nowMs - new Date(oldestOTP.createdAt).getTime()),
         )
       : OTP_RATE_LIMIT_WINDOW_MS;
 
@@ -251,10 +256,16 @@ async function sendSMSViaProvider(phoneNumber: string, message: string): Promise
   }
 }
 
-export async function storeOTP(userId: string, otp: string, action?: string) {
+export async function storeOTP(
+  userId: string,
+  otp: string,
+  action?: string,
+  now: Clock = systemClock,
+) {
   const { salt, hash } = hashOTP(otp);
   const storedValue = `${salt}:${hash}`;
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+  const currentTime = now();
+  const expiresAt = new Date(currentTime.getTime() + 5 * 60 * 1000);
 
   // PostgreSQL error code for serialization failure (40001) and deadlock (40P01).
   // Either can be raised when two SERIALIZABLE transactions conflict on the same
@@ -321,13 +332,18 @@ export async function storeOTP(userId: string, otp: string, action?: string) {
 
   await db
     .update(users)
-    .set({ lastOtpSentAt: new Date() })
+    .set({ lastOtpSentAt: currentTime })
     .where(eq(users.id, userId));
 
   return newVerification!;
 }
 
-export async function verifyOTP(userId: string, otp: string, ipAddress?: string) {
+export async function verifyOTP(
+  userId: string,
+  otp: string,
+  ipAddress?: string,
+  now: Clock = systemClock,
+) {
   // Explicitly exclude action-scoped OTPs — those must only be consumed by the
   // action-otp/verify endpoint.  Without this guard a privileged OTP (e.g.
   // issued for delete_account) could be consumed by the general email/phone
@@ -349,7 +365,7 @@ export async function verifyOTP(userId: string, otp: string, ipAddress?: string)
     };
   }
 
-  if (new Date() > verification.expiresAt) {
+  if (now() > verification.expiresAt) {
     return {
       success: false,
       message: "Verification code has expired. Please request a new one.",
@@ -361,7 +377,7 @@ export async function verifyOTP(userId: string, otp: string, ipAddress?: string)
     where: eq(users.id, userId),
   });
 
-  if (user && user.lockUntil && new Date() < user.lockUntil) {
+  if (user && user.lockUntil && now() < user.lockUntil) {
     return {
       success: false,
       message: "Account is temporarily locked. Please try again later.",
@@ -397,15 +413,15 @@ export async function verifyOTP(userId: string, otp: string, ipAddress?: string)
       .set({ attempts: newAttempts })
       .where(eq(emailVerifications.id, verification.id));
 
-    const now = new Date();
-    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+    const currentTime = now();
+    const oneHourAgo = new Date(currentTime.getTime() - 60 * 60 * 1000);
 
     let cumulativeFailures = (user?.otpFailedAttempts || 0) + 1;
     let windowStart = user?.otpAttemptsWindowStart;
 
     if (!windowStart || windowStart < oneHourAgo) {
       cumulativeFailures = 1;
-      windowStart = now;
+      windowStart = currentTime;
     }
 
     await db
@@ -417,10 +433,10 @@ export async function verifyOTP(userId: string, otp: string, ipAddress?: string)
       .where(eq(users.id, userId));
 
     if (ipAddress) {
-      const now = Date.now();
+      const nowMs = currentTime.getTime();
       let state = otpFailuresByIp.get(ipAddress);
 
-      if (state && now - state.lastAttempt > IP_TRACKING_WINDOW_MS) {
+      if (state && nowMs - state.lastAttempt > IP_TRACKING_WINDOW_MS) {
         otpFailuresByIp.delete(ipAddress);
         state = undefined;
       }
@@ -430,12 +446,12 @@ export async function verifyOTP(userId: string, otp: string, ipAddress?: string)
           count: 0,
           userIds: new Set<string>(),
           phoneNumbers: new Set<string>(),
-          lastAttempt: now,
+          lastAttempt: nowMs,
         };
       }
 
       state.count++;
-      state.lastAttempt = now;
+      state.lastAttempt = nowMs;
       state.userIds.add(userId);
       if (user?.phoneNumber) state.phoneNumbers.add(user.phoneNumber);
 
@@ -458,7 +474,7 @@ export async function verifyOTP(userId: string, otp: string, ipAddress?: string)
     });
 
     if (cumulativeFailures >= 10) {
-      const lockUntil = new Date(now.getTime() + 24 * 60 * 60 * 1000); 
+      const lockUntil = new Date(currentTime.getTime() + 24 * 60 * 60 * 1000);
       await db
         .update(users)
         .set({
@@ -486,7 +502,7 @@ export async function verifyOTP(userId: string, otp: string, ipAddress?: string)
     }
 
     if (newAttempts >= 5) {
-      const lockUntil = new Date(now.getTime() + 30 * 60 * 1000); 
+      const lockUntil = new Date(currentTime.getTime() + 30 * 60 * 1000);
       await db.update(users).set({ lockUntil }).where(eq(users.id, userId));
 
       logOTPEvent(AuditEventType.ACCOUNT_LOCKED_5_ATTEMPTS, userId, {
@@ -535,10 +551,12 @@ export async function verifyOTP(userId: string, otp: string, ipAddress?: string)
   return { success: true, message: "Email verified successfully!" };
 }
 
-export async function cleanupExpiredOTPs(): Promise<number> {
+export async function cleanupExpiredOTPs(
+  now: Clock = systemClock,
+): Promise<number> {
   const result = await db
     .delete(emailVerifications)
-    .where(lt(emailVerifications.expiresAt, new Date()))
+    .where(lt(emailVerifications.expiresAt, now()))
     .returning();
   return result.length;
 }
